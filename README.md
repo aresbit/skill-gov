@@ -1,6 +1,6 @@
 # skill-gov
 
-C 语言复刻版（Termux 友好）：实现 Rust 版本的核心 CLI 能力。
+管理 claude 技能
 
 ## 功能
 
@@ -15,7 +15,7 @@ C 语言复刻版（Termux 友好）：实现 Rust 版本的核心 CLI 能力。
 ## 编译
 
 ```sh
-make release
+make all
 # 或
 make debug
 make sanitize
@@ -45,4 +45,3 @@ skill-gov disable 'actix-*'
 skill-gov enable 'flutter-*' --dry-run
 ```
 
-注意：当前 C 版本专注非交互式能力，不包含 Rust 版 TUI 交互界面。
