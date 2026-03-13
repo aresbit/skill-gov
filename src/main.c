@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     int list;
     int dry_run;
+    int force;
     int has_cmd;
     int enable;
     int enable_all;
@@ -53,10 +54,10 @@ static void usage(FILE *out) {
             "skill-gov - C clone for skills enable/disable\n\n"
             "Usage:\n"
             "  skill-gov --list\n"
-            "  skill-gov [--dry-run] enable <pattern> [pattern ...]\n"
-            "  skill-gov [--dry-run] disable <pattern> [pattern ...]\n"
-            "  skill-gov [--dry-run] enableall\n"
-            "  skill-gov [--dry-run] disableall\n"
+            "  skill-gov [--dry-run] [--force] enable <pattern> [pattern ...]\n"
+            "  skill-gov [--dry-run] [--force] disable <pattern> [pattern ...]\n"
+            "  skill-gov [--dry-run] [--force] enableall\n"
+            "  skill-gov [--dry-run] [--force] disableall\n"
             "\n"
             "Glob supports '*' and '?', case-insensitive.\n");
 }
@@ -155,6 +156,8 @@ static int parse_cli(int argc, char **argv, Cli *cli) {
             cli->list = 1;
         } else if (strcmp(argv[i], "--dry-run") == 0) {
             cli->dry_run = 1;
+        } else if (strcmp(argv[i], "--force") == 0) {
+            cli->force = 1;
         } else if (strcmp(argv[i], "enable") == 0 || strcmp(argv[i], "disable") == 0 ||
                    strcmp(argv[i], "enableall") == 0 ||
                    strcmp(argv[i], "disableall") == 0) {
@@ -203,6 +206,10 @@ static int parse_cli(int argc, char **argv, Cli *cli) {
 
     if (cli->list && cli->has_cmd) {
         fprintf(stderr, "--list cannot be combined with subcommands\n");
+        return 1;
+    }
+    if (cli->list && cli->force) {
+        fprintf(stderr, "--force cannot be combined with --list\n");
         return 1;
     }
 
@@ -268,7 +275,45 @@ static int exists_path(const char *path) {
     return stat(path, &st) == 0;
 }
 
-static int atomic_batch_move(const MoveVec *moves, int *rolled_back) {
+static int rm_rf(const char *path) {
+    struct stat st;
+
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        struct dirent *ent;
+
+        if (!d) {
+            return -1;
+        }
+
+        while ((ent = readdir(d)) != NULL) {
+            char *child;
+            int rc;
+
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            child = spc_path_join(path, ent->d_name);
+            rc = rm_rf(child);
+            free(child);
+            if (rc != 0) {
+                closedir(d);
+                return -1;
+            }
+        }
+
+        closedir(d);
+        return rmdir(path);
+    }
+
+    return unlink(path);
+}
+
+static int atomic_batch_move(const MoveVec *moves, int *rolled_back, int force) {
     size_t i;
     *rolled_back = 0;
 
@@ -277,13 +322,25 @@ static int atomic_batch_move(const MoveVec *moves, int *rolled_back) {
             fprintf(stderr, "  %sabort%s source missing: %s\n", DIM, RESET, moves->items[i].src);
             return 1;
         }
-        if (exists_path(moves->items[i].dst)) {
+        if (!force && exists_path(moves->items[i].dst)) {
             fprintf(stderr, "  %sabort%s destination already exists: %s\n", DIM, RESET, moves->items[i].dst);
             return 1;
         }
     }
 
     for (i = 0; i < moves->len; i++) {
+        if (force && exists_path(moves->items[i].dst)) {
+            if (rm_rf(moves->items[i].dst) != 0) {
+                fprintf(stderr,
+                        "  %sfailed%s remove existing destination %s (%s)\n",
+                        RED,
+                        RESET,
+                        moves->items[i].dst,
+                        strerror(errno));
+                return 1;
+            }
+        }
+
         if (rename(moves->items[i].src, moves->items[i].dst) != 0) {
             size_t j;
             fprintf(stderr,
@@ -349,6 +406,19 @@ static void run_batch(const SkillVec *skills,
         {
             char *src = spc_path_join(cli->enable ? disabled_dir : skills_dir, s->name);
             char *dst = spc_path_join(cli->enable ? skills_dir : disabled_dir, s->name);
+
+            if (exists_path(dst)) {
+                if (cli->force) {
+                    printf("  %sreplace%s %s (destination exists)\n", DIM, RESET, s->name);
+                } else {
+                    printf("  %sskip%s %s (destination already exists)\n", DIM, RESET, s->name);
+                    skipped++;
+                    free(src);
+                    free(dst);
+                    continue;
+                }
+            }
+
             move_vec_push(&moves, src, dst, spc_strdup(s->name));
 
             if (cli->dry_run) {
@@ -379,8 +449,13 @@ static void run_batch(const SkillVec *skills,
 
     {
         int rolled_back = 0;
-        if (atomic_batch_move(&moves, &rolled_back) != 0) {
-            if (rolled_back > 0) {
+        if (atomic_batch_move(&moves, &rolled_back, cli->force) != 0) {
+            if (cli->force) {
+                fprintf(stderr,
+                        "%sFailed%s - partial changes may have been made when using --force\n",
+                        RED,
+                        RESET);
+            } else if (rolled_back > 0) {
                 fprintf(stderr,
                         "%sFailed%s - rolled back %d move(s), no changes were made\n",
                         RED,

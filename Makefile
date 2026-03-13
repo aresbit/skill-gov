@@ -7,6 +7,9 @@ SRC := $(wildcard src/*.c)
 OBJ_DEBUG := $(patsubst src/%.c,build/debug/%.o,$(SRC))
 OBJ_RELEASE := $(patsubst src/%.c,build/release/%.o,$(SRC))
 OBJ_SAN := $(patsubst src/%.c,build/sanitize/%.o,$(SRC))
+STAMP_DEBUG := build/debug/.toolchain
+STAMP_RELEASE := build/release/.toolchain
+STAMP_SAN := build/sanitize/.toolchain
 
 CPPFLAGS := -Iinclude -D_POSIX_C_SOURCE=200809L
 CSTD := -std=c17
@@ -44,15 +47,21 @@ build/sanitize/$(PROJECT): $(OBJ_SAN)
 	@mkdir -p $(@D)
 	$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
-build/debug/%.o: src/%.c
+$(STAMP_DEBUG) $(STAMP_RELEASE) $(STAMP_SAN):
+	@mkdir -p $(@D)
+	@sig="$$( $(CC) -dumpmachine 2>/dev/null || printf '%s' unknown )"; \
+	prev="$$(cat $@ 2>/dev/null || true)"; \
+	if [ "$$sig" != "$$prev" ]; then printf '%s\n' "$$sig" > $@; fi
+
+build/debug/%.o: src/%.c $(STAMP_DEBUG)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
-build/release/%.o: src/%.c
+build/release/%.o: src/%.c $(STAMP_RELEASE)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
-build/sanitize/%.o: src/%.c
+build/sanitize/%.o: src/%.c $(STAMP_SAN)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
