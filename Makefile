@@ -1,6 +1,14 @@
 PROJECT := skill-gov
-CC ?= cc
-PREFIX ?= $(HOME)/.local
+
+ifeq '$(OS)' 'Windows_NT'
+	CC := gcc
+	EXE_SUFFIX := .exe
+	PREFIX ?= $(subst \,/,$(USERPROFILE))/.local
+else
+	CC := cc
+	EXE_SUFFIX :=
+	PREFIX ?= $(HOME)/.local
+endif
 BINDIR ?= $(PREFIX)/bin
 
 SRC := $(wildcard src/*.c)
@@ -24,34 +32,32 @@ LDLIBS :=
 
 all: release
 
-debug: build/debug/$(PROJECT)
+debug: build/debug/$(PROJECT)$(EXE_SUFFIX)
 
-release: build/release/$(PROJECT)
+release: build/release/$(PROJECT)$(EXE_SUFFIX)
 
-sanitize: build/sanitize/$(PROJECT)
+sanitize: build/sanitize/$(PROJECT)$(EXE_SUFFIX)
 
-build/debug/$(PROJECT): CFLAGS := $(CSTD) $(WARN) $(OPT_DEBUG)
-build/release/$(PROJECT): CFLAGS := $(CSTD) $(WARN) $(OPT_RELEASE)
-build/sanitize/$(PROJECT): CFLAGS := $(CSTD) $(WARN) $(OPT_SAN)
-build/sanitize/$(PROJECT): LDFLAGS += -fsanitize=address,undefined
+build/debug/$(PROJECT)$(EXE_SUFFIX): CFLAGS := $(CSTD) $(WARN) $(OPT_DEBUG)
+build/release/$(PROJECT)$(EXE_SUFFIX): CFLAGS := $(CSTD) $(WARN) $(OPT_RELEASE)
+build/sanitize/$(PROJECT)$(EXE_SUFFIX): CFLAGS := $(CSTD) $(WARN) $(OPT_SAN)
+build/sanitize/$(PROJECT)$(EXE_SUFFIX): LDFLAGS += -fsanitize=address,undefined
 
-build/debug/$(PROJECT): $(OBJ_DEBUG)
+build/debug/$(PROJECT)$(EXE_SUFFIX): $(OBJ_DEBUG)
 	@mkdir -p $(@D)
 	$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
-build/release/$(PROJECT): $(OBJ_RELEASE)
+build/release/$(PROJECT)$(EXE_SUFFIX): $(OBJ_RELEASE)
 	@mkdir -p $(@D)
 	$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
-build/sanitize/$(PROJECT): $(OBJ_SAN)
+build/sanitize/$(PROJECT)$(EXE_SUFFIX): $(OBJ_SAN)
 	@mkdir -p $(@D)
 	$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 $(STAMP_DEBUG) $(STAMP_RELEASE) $(STAMP_SAN):
 	@mkdir -p $(@D)
-	@sig="$$( $(CC) -dumpmachine 2>/dev/null || printf '%s' unknown )"; \
-	prev="$$(cat $@ 2>/dev/null || true)"; \
-	if [ "$$sig" != "$$prev" ]; then printf '%s\n' "$$sig" > $@; fi
+	@$(CC) -dumpmachine 2>/dev/null > $@.tmp && mv $@.tmp $@
 
 build/debug/%.o: src/%.c $(STAMP_DEBUG)
 	@mkdir -p $(@D)
@@ -67,10 +73,10 @@ build/sanitize/%.o: src/%.c $(STAMP_SAN)
 
 install: release
 	@mkdir -p $(DESTDIR)$(BINDIR)
-	install -m 0755 build/release/$(PROJECT) $(DESTDIR)$(BINDIR)/$(PROJECT)
+	@cp -f build/release/$(PROJECT)$(EXE_SUFFIX) $(DESTDIR)$(BINDIR)/$(PROJECT)$(EXE_SUFFIX)
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/$(PROJECT)
+	rm -f $(DESTDIR)$(BINDIR)/$(PROJECT)$(EXE_SUFFIX)
 
 clean:
 	rm -rf build

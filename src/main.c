@@ -278,7 +278,11 @@ static int exists_path(const char *path) {
 static int rm_rf(const char *path) {
     struct stat st;
 
+#ifdef _WIN32
+    if (stat(path, &st) != 0) {
+#else
     if (lstat(path, &st) != 0) {
+#endif
         return errno == ENOENT ? 0 : -1;
     }
 
@@ -503,7 +507,10 @@ int main(int argc, char **argv) {
 
     home = getenv("HOME");
     if (!home || home[0] == '\0') {
-        die("HOME is not set");
+        home = getenv("USERPROFILE");
+        if (!home || home[0] == '\0') {
+            die("HOME (or USERPROFILE on Windows) is not set");
+        }
     }
 
     claude_dir = spc_path_join(home, ".claude");
@@ -521,7 +528,11 @@ int main(int argc, char **argv) {
     }
 
     if (!is_dir_path(disabled_dir)) {
+#ifdef _WIN32
+        if (mkdir(disabled_dir) != 0 && errno != EEXIST) {
+#else
         if (mkdir(disabled_dir, 0755) != 0 && errno != EEXIST) {
+#endif
             fprintf(stderr, "failed to create directory: %s (%s)\n", disabled_dir, strerror(errno));
             free(cli.patterns);
             free(skills_dir);
