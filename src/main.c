@@ -243,6 +243,98 @@ static void scan_dir_skills(const char *dir, int enabled, SkillVec *skills) {
     closedir(d);
 }
 
+/* ── Dedup: a skill can exist in BOTH the enabled dir and the disabled dir. ──
+ * Primary identity is file CONTENT (byte-compare SKILL.md); mtime is only the
+ * tiebreaker for a genuine version conflict. mtime alone is unreliable — a
+ * freshly re-copied or newly-cloned identical skill gets a new mtime and would
+ * wrongly "win" a date-only comparison. */
+
+static int files_equal(const char *a, const char *b) {
+    FILE *fa = fopen(a, "rb");
+    FILE *fb = fopen(b, "rb");
+    if (!fa || !fb) {
+        if (fa) fclose(fa);
+        if (fb) fclose(fb);
+        return 0;
+    }
+    int eq = 1;
+    for (;;) {
+        int ca = fgetc(fa);
+        int cb = fgetc(fb);
+        if (ca == EOF || cb == EOF) {
+            if (ca != cb) {
+                eq = 0;
+            }
+            break;
+        }
+        if (ca != cb) {
+            eq = 0;
+            break;
+        }
+    }
+    fclose(fa);
+    fclose(fb);
+    return eq;
+}
+
+static int two_skills_identical(const char *skills_dir, const char *disabled_dir,
+                                const char *name) {
+    char a[4096], b[4096];
+    snprintf(a, sizeof a, "%s/%s/SKILL.md", skills_dir, name);
+    snprintf(b, sizeof b, "%s/%s/SKILL.md", disabled_dir, name);
+    return files_equal(a, b);
+}
+
+static long skill_mtime(const char *skills_dir, const char *disabled_dir,
+                        int enabled, const char *name) {
+    char p[4096];
+    struct stat st;
+    snprintf(p, sizeof p, "%s/%s/SKILL.md", enabled ? skills_dir : disabled_dir, name);
+    if (stat(p, &st) == 0) {
+        return (long)st.st_mtime;
+    }
+    snprintf(p, sizeof p, "%s/%s", enabled ? skills_dir : disabled_dir, name);
+    if (stat(p, &st) == 0) {
+        return (long)st.st_mtime;
+    }
+    return 0;
+}
+
+/* Remove same-name duplicates, keeping one copy: identical content -> keep the
+ * ENABLED copy; differing content (a real update) -> keep the one with the
+ * newer mtime. */
+static void skill_vec_dedup(SkillVec *vec, const char *skills_dir,
+                            const char *disabled_dir) {
+    size_t i, j;
+    for (i = 0; i < vec->len; i++) {
+        for (j = i + 1; j < vec->len; j++) {
+            if (strcmp(vec->items[i].name, vec->items[j].name) != 0) {
+                continue;
+            }
+            size_t keep_i;
+            if (two_skills_identical(skills_dir, disabled_dir, vec->items[i].name)) {
+                keep_i = vec->items[i].enabled ? i : j;
+            } else {
+                long mi = skill_mtime(skills_dir, disabled_dir, vec->items[i].enabled, vec->items[i].name);
+                long mj = skill_mtime(skills_dir, disabled_dir, vec->items[j].enabled, vec->items[j].name);
+                keep_i = mi >= mj ? i : j;
+            }
+            if (keep_i == i) {
+                free(vec->items[j].name);
+                vec->items[j] = vec->items[vec->len - 1];
+                vec->len--;
+                j--;
+            } else {
+                free(vec->items[i].name);
+                vec->items[i] = vec->items[vec->len - 1];
+                vec->len--;
+                i--;
+                break;
+            }
+        }
+    }
+}
+
 static void run_list(const SkillVec *skills) {
     size_t i;
     size_t enabled = 0;
@@ -544,6 +636,10 @@ int main(int argc, char **argv) {
     skill_vec_init(&skills);
     scan_dir_skills(skills_dir, 1, &skills);
     scan_dir_skills(disabled_dir, 0, &skills);
+
+    /* Resolve same-name copies that landed in both the enabled and disabled
+     * dirs (content-identical -> keep enabled; version conflict -> keep newer). */
+    skill_vec_dedup(&skills, skills_dir, disabled_dir);
 
     if (skills.len == 0) {
         fprintf(stderr, "No skills found\n");
